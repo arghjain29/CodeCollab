@@ -80,6 +80,29 @@ Both build from the repository root, because the npm workspace needs the root lo
 built with. Changing `VITE_API_URL` or the Clerk key means `docker compose build web`, not a
 restart. The API, by contrast, reads its configuration when it starts.
 
+## Demo video
+
+The product demo is written as React components and rendered to a real MP4 with
+[Remotion](https://www.remotion.dev), so it can be re-rendered whenever the product changes
+instead of being re-recorded by hand.
+
+```bash
+cd video
+npm install
+npm run studio          # preview and scrub the timeline in a browser
+npm run render            # out/codecollab-demo.mp4      (1920x1080, 51s)
+npm run render:gif        # out/codecollab-workspace.gif (5.7s: the whole workspace)
+npm run render:gif:review # out/codecollab-review.gif    (9s: the AI diff being accepted)
+```
+
+`video/` is deliberately outside the npm workspaces, so Remotion never lands in a deployment
+install. The running order lives in `video/src/Demo.tsx`: the problem in the first five seconds,
+a wide shot of the workspace, four beats of product, then the call to action. There is no
+voiceover, so every beat carries a caption.
+
+The short loops are separate compositions built from the same scenes (`Clip-workspace`,
+`Clip-review`), so re-cutting the film can't leave them pointing at the wrong frames.
+
 ## Running projects in the browser
 
 Projects run inside [WebContainer](https://webcontainers.io) (Node.js in the browser), on each person's own machine. What **Run** does depends on the files:
