@@ -1,6 +1,6 @@
 import React from 'react';
 import { AbsoluteFill, interpolate, useCurrentFrame, useVideoConfig } from 'remotion';
-import { C, CODE, F } from './theme';
+import { C, CODE, F, ON_PRESENCE } from './theme';
 import { Caption, Caret, Tree, Window, typeOut, useEnter } from './ui';
 import { Scene, useKenBurns } from './scenes';
 
@@ -34,7 +34,7 @@ export const Workspace: React.FC<{ duration: number }> = ({ duration }) => {
           <Window
             width={1740}
             people={[
-              ['M', C.marigold, C.ink],
+              ['M', C.marigold, ON_PRESENCE],
               ['D', C.teal, '#fff'],
               ['S', C.rose, '#fff'],
               ['AI', C.cobalt, '#fff'],

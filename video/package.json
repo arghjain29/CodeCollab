@@ -9,7 +9,11 @@
     "render": "remotion render Demo out/codecollab-demo.mp4 --codec=h264 --crf=20",
     "render:gif": "remotion render Clip-workspace out/codecollab-workspace.gif --codec=gif --scale=0.42 --every-nth-frame=2",
     "still": "remotion still Demo",
-    "render:gif:review": "remotion render Clip-review out/codecollab-review.gif --codec=gif --scale=0.42 --every-nth-frame=2"
+    "render:gif:review": "remotion render Clip-review out/codecollab-review.gif --codec=gif --scale=0.42 --every-nth-frame=2",
+    "render:dark": "cross-env REMOTION_THEME=dark remotion render Demo out/codecollab-demo-dark.mp4 --codec=h264 --crf=20",
+    "still:dark": "cross-env REMOTION_THEME=dark remotion still Demo",
+    "stills": "node scripts/stills.mjs",
+    "stills:dark": "cross-env REMOTION_THEME=dark node scripts/stills.mjs"
   },
   "dependencies": {
     "@fontsource-variable/bricolage-grotesque": "^5.3.0",
@@ -23,6 +27,7 @@
   "devDependencies": {
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "cross-env": "^10.1.0",
     "typescript": "^7.0.2"
   }
 }

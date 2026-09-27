@@ -91,6 +91,7 @@ cd video
 npm install
 npm run studio          # preview and scrub the timeline in a browser
 npm run render            # out/codecollab-demo.mp4      (1920x1080, 51s)
+npm run render:dark       # out/codecollab-demo-dark.mp4 (the same film, dark theme)
 npm run render:gif        # out/codecollab-workspace.gif (5.7s: the whole workspace)
 npm run render:gif:review # out/codecollab-review.gif    (9s: the AI diff being accepted)
 ```
@@ -101,7 +102,9 @@ a wide shot of the workspace, four beats of product, then the call to action. Th
 voiceover, so every beat carries a caption.
 
 The short loops are separate compositions built from the same scenes (`Clip-workspace`,
-`Clip-review`), so re-cutting the film can't leave them pointing at the wrong frames.
+`Clip-review`), so re-cutting the film can't leave them pointing at the wrong frames. Setting
+`REMOTION_THEME=dark` swaps the palette for the app's own dark tokens; presence colours stay put,
+because they identify people rather than follow the theme.
 
 ## Running projects in the browser
 

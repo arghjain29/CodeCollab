@@ -1,6 +1,6 @@
 import React from 'react';
 import { interpolate, spring, useCurrentFrame, useVideoConfig } from 'remotion';
-import { C, F } from './theme';
+import { C, F, ON_PRESENCE, THEME } from './theme';
 
 /** Eases 0 → 1 as something arrives, with a touch of overshoot. */
 export const useEnter = (delay = 0, duration = 22) => {
@@ -30,7 +30,10 @@ export const typeOut = (
 /** The CodeCollab mark, drawn rather than loaded so nothing depends on a file. */
 export const Mark: React.FC<{ size?: number }> = ({ size = 64 }) => (
   <svg width={size} height={size} viewBox="0 0 32 32">
-    <rect width="32" height="32" rx="8" fill={C.ink} />
+    <rect width="32" height="32" rx="8" fill="#1B2233" />
+    {THEME === 'dark' && (
+      <rect x="0.5" y="0.5" width="31" height="31" rx="7.5" fill="none" stroke={C.line} />
+    )}
     <path d="M9 7v16l4.5-4.5L17 25l2.5-1.2-3.4-6.3H22z" fill={C.marigold} />
     <path d="M19 7v10" stroke={C.teal} strokeWidth="3" strokeLinecap="round" />
   </svg>
@@ -64,7 +67,7 @@ export const Caret: React.FC<{ name: string; color: string }> = ({ name, color }
         bottom: '1.15em',
         left: 0,
         background: color,
-        color: C.ink,
+        color: ON_PRESENCE,
         font: `700 0.62em/1.5 ${F.sans}`,
         padding: '1px 7px',
         borderRadius: '5px 5px 5px 0',
@@ -100,7 +103,7 @@ export const Pointer: React.FC<{ x: number; y: number; clicking?: boolean }> = (
       <path
         d="M5 2l14 8.5-6.2 1.3L16 20l-3 1.3-3.2-8L5 17z"
         fill={C.ink}
-        stroke="#fff"
+        stroke={C.paper}
         strokeWidth="1.5"
       />
     </svg>
@@ -174,7 +177,7 @@ export const Window: React.FC<{
       <div style={{ display: 'flex' }}>
         {(
           people ?? [
-            ['M', C.marigold, C.ink],
+            ['M', C.marigold, ON_PRESENCE],
             ['D', C.teal, '#fff'],
             ['AI', C.cobalt, '#fff'],
           ]

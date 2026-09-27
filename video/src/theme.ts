@@ -1,5 +1,12 @@
-/** The app's own palette and type, so the video looks like the product, not like a template. */
-export const C = {
+/**
+ * The app's own palette and type, so the video looks like the product, not like a template.
+ * Both themes are the ones in `frontend/src/index.css`, copied value for value.
+ *
+ * Which one is used comes from REMOTION_THEME, set per render, because a colour has to be a
+ * plain string here: several places mix a token with an alpha suffix (`${C.teal}26`), which a
+ * CSS variable can't do.
+ */
+const LIGHT = {
   paper: '#EEF1F5',
   surface: '#FFFFFF',
   surface2: '#E4E8EF',
@@ -12,6 +19,25 @@ export const C = {
   teal: '#1F9E8F',
   rose: '#E0527A',
 } as const;
+
+const DARK = {
+  ...LIGHT,
+  paper: '#141A26',
+  surface: '#1C2433',
+  surface2: '#252F42',
+  ink: '#E6EAF2',
+  inkMuted: '#9AA4BA',
+  line: '#313C52',
+  cobalt: '#6D8CFF',
+  cobaltInk: '#0F1522',
+  // Presence colours identify people, so they stay the same in both themes.
+} as const;
+
+export const THEME = process.env.REMOTION_THEME === 'dark' ? 'dark' : 'light';
+export const C = THEME === 'dark' ? DARK : LIGHT;
+
+/** Always legible on a presence colour, which is bright in either theme. */
+export const ON_PRESENCE = '#1B2233';
 
 export const F = {
   display: "'Bricolage Grotesque Variable', system-ui, sans-serif",
