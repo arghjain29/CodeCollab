@@ -16,7 +16,7 @@ A collaborative code workspace: a shared editor with live cursors, persistent te
 | 3     | Persistent chat: threads, reactions, mentions, unread                            | Done   |
 | 4     | AI gateway: multi-provider, streaming, diff proposals, quotas & abuse protection | Done   |
 | 5     | Billing: Razorpay payments, verified webhooks, prepaid Pro passes, entitlements  | Done   |
-| 6     | Polish: landing page, onboarding, Sentry, Playwright e2e, deploy                 | Next   |
+| 6     | Polish: landing page, onboarding, Sentry, Playwright e2e, deploy                 | Done   |
 
 ## Stack
 
