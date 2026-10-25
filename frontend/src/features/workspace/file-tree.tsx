@@ -9,7 +9,7 @@ import {
   Trash2,
   type LucideIcon,
 } from 'lucide-react';
-import { useMemo, useRef, useState, type MouseEvent } from 'react';
+import { useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { ApiError } from '@/lib/api';
@@ -31,7 +31,14 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useCreateFile, useDeleteFile, useMoveFile } from './files-api';
 import { InlineNameInput } from './inline-name-input';
-import { ancestorsAndSelf, buildTree, folderFor, remapExpanded, type TreeNode } from './tree-model';
+import {
+  ancestorsAndSelf,
+  buildTree,
+  folderFor,
+  remapExpanded,
+  visibleRows,
+  type TreeNode,
+} from './tree-model';
 import { EntryIcon, TreeRow, indent } from './tree-row';
 import type { Peer } from './use-project-room';
 import { useTreeDnd } from './use-tree-dnd';
@@ -84,6 +91,10 @@ export function FileTree({
   const move = useMoveFile(projectId);
 
   const selected = selectedId ? byId.get(selectedId) : undefined;
+  const listRef = useRef<HTMLUListElement>(null);
+  const rows = useMemo(() => visibleRows(tree, expanded), [tree, expanded]);
+  /** The row Tab lands on: the selection if it is on screen, else the first row. */
+  const tabStop = rows.some((r) => r.entry.id === selectedId) ? selectedId : rows[0]?.entry.id;
 
   // Who is looking at which file (other people only).
   const peersByFile = useMemo(() => {
@@ -110,6 +121,15 @@ export function FileTree({
       return next;
     });
 
+  const focusRow = (id: string) => {
+    setSelectedId(id);
+    listRef.current
+      ?.querySelector<HTMLElement>(`[data-entry-id="${id}"] [role="treeitem"]`)
+      ?.focus();
+  };
+  /** Focus a row once it is back on screen, e.g. after its name box closes. */
+  const refocus = (id: string) => requestAnimationFrame(() => focusRow(id));
+
   // ---------- Actions ----------
 
   const startCreate = (kind: 'file' | 'folder', parent: string) => {
@@ -122,12 +142,14 @@ export function FileTree({
     setEditing(null);
     setSelectedId(entry.id);
     if (kind === 'file') onOpen(entry);
+    else refocus(entry.id);
   };
 
   const submitRename = async (entry: FileEntry, name: string) => {
     const to = joinPath(parentOf(entry.path), name);
     await move.mutateAsync({ id: entry.id, path: to });
     setEditing(null);
+    refocus(entry.id);
     if (entry.kind === 'folder') setExpanded((prev) => remapExpanded(prev, entry.path, to));
   };
 
@@ -280,7 +302,7 @@ export function FileTree({
           open={isOpen}
           active={entry.id === activeFileId}
           selected={entry.id === selectedId}
-          tabbable
+          tabbable={entry.id === tabStop}
           peers={peersByFile.get(entry.id) ?? []}
           onActivate={() => {
             setSelectedId(entry.id);
@@ -293,7 +315,10 @@ export function FileTree({
                 label={`Rename ${node.name}`}
                 initial={node.name}
                 onSubmit={(name) => submitRename(entry, name)}
-                onCancel={() => setEditing(null)}
+                onCancel={() => {
+                  setEditing(null);
+                  refocus(entry.id);
+                }}
               />
             ) : undefined
           }
@@ -334,6 +359,53 @@ export function FileTree({
         )}
       </li>
     );
+  };
+
+  /** Arrow keys, Home/End, F2 and Delete, as in desktop editors. */
+  const onTreeKeyDown = (e: KeyboardEvent) => {
+    if (editing || e.altKey || e.ctrlKey || e.metaKey) return;
+    const i = rows.findIndex((r) => r.entry.id === selectedId);
+    const node = rows[i];
+    const entry = node?.entry;
+    const isOpenFolder = entry?.kind === 'folder' && expanded.has(entry.path);
+    const go = (target: TreeNode | undefined) => target && focusRow(target.entry.id);
+
+    switch (e.key) {
+      case 'ArrowDown':
+        go(i < 0 ? rows[0] : rows[i + 1]);
+        break;
+      case 'ArrowUp':
+        go(i < 0 ? rows[0] : rows[i - 1]);
+        break;
+      case 'Home':
+        go(rows[0]);
+        break;
+      case 'End':
+        go(rows[rows.length - 1]);
+        break;
+      case 'ArrowRight':
+        if (entry?.kind !== 'folder') return;
+        if (!isOpenFolder) toggle(entry.path);
+        else if (node?.children.length) go(rows[i + 1]);
+        break;
+      case 'ArrowLeft': {
+        if (!entry) return;
+        if (isOpenFolder) toggle(entry.path);
+        else go(rows.find((r) => r.entry.path === parentOf(entry.path)));
+        break;
+      }
+      case 'F2':
+        if (!canEdit || !entry) return;
+        setEditing({ mode: 'rename', id: entry.id });
+        break;
+      case 'Delete':
+        if (!canEdit || !entry) return;
+        setDeleting(entry);
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
   };
 
   /** Right-click: remember what was clicked so the menu can offer the right actions. */
@@ -414,7 +486,7 @@ export function FileTree({
                 {canEdit ? 'No files yet. Create one to start.' : 'This project has no files yet.'}
               </p>
             ) : (
-              <ul role="tree" aria-label="Project files">
+              <ul ref={listRef} role="tree" aria-label="Project files" onKeyDown={onTreeKeyDown}>
                 {rootNew}
                 {tree.map((n) => renderNode(n, 0))}
               </ul>

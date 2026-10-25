@@ -180,3 +180,35 @@ describe('drag and drop', () => {
     expect(toastError).toHaveBeenCalledWith('“app.ts” already exists in “docs”');
   });
 });
+
+describe('keyboard', () => {
+  it('moves with the arrow keys, opens folders and renames with F2', async () => {
+    moveFile.mockResolvedValue(entry('src/main.ts'));
+    const { user } = setup();
+
+    await user.click(screen.getByRole('treeitem', { name: /docs/ }));
+    await user.keyboard('{ArrowDown}'); // docs -> src
+    expect(screen.getByRole('treeitem', { name: /src/ })).toHaveFocus();
+
+    await user.keyboard('{ArrowRight}'); // open src
+    expect(screen.getByRole('treeitem', { name: /src/ })).toHaveAttribute('aria-expanded', 'true');
+
+    await user.keyboard('{ArrowRight}'); // into app.ts
+    expect(screen.getByRole('treeitem', { name: 'app.ts' })).toHaveFocus();
+
+    await user.keyboard('{F2}');
+    const box = screen.getByRole('textbox', { name: 'Rename app.ts' });
+    await user.clear(box);
+    await user.type(box, 'main.ts{Enter}');
+    expect(moveFile).toHaveBeenCalledWith({ id: entry('src/app.ts').id, path: 'src/main.ts' });
+  });
+
+  it('asks before deleting with the Delete key', async () => {
+    const { user } = setup();
+
+    await user.click(screen.getByRole('treeitem', { name: /docs/ }));
+    await user.keyboard('{Delete}');
+
+    expect(await screen.findByRole('dialog', { name: 'Delete docs?' })).toBeInTheDocument();
+  });
+});
