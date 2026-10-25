@@ -28,6 +28,29 @@ export const FilePathSchema = z
     'Use letters, numbers, spaces and . _ - @ + in names',
   );
 
+/** A single file or folder name, as typed in the explorer. Folders are picked, not typed. */
+export const FileNameSchema = z
+  .string()
+  .trim()
+  .min(1, 'Enter a name')
+  .max(255, 'That name is too long')
+  .refine((n) => !n.includes('/') && !n.includes('\\'), 'Names can’t contain slashes')
+  .refine((n) => n !== '.' && n !== '..', 'That name is reserved')
+  .refine((n) => SEGMENT.test(n), 'Use letters, numbers, spaces and . _ - @ + in names');
+
+/** `parent` + `name` as a project path; an empty parent is the project root. */
+export const joinPath = (parent: string, name: string) => (parent ? `${parent}/${name}` : name);
+
+/** The folder holding `path`, or '' for the root. */
+export const parentOf = (path: string) => path.split('/').slice(0, -1).join('/');
+
+/** The last segment of `path`. */
+export const baseName = (path: string) => path.split('/').pop() ?? path;
+
+/** True when `path` is `folder` itself or somewhere inside it. */
+export const isWithin = (path: string, folder: string) =>
+  path === folder || path.startsWith(`${folder}/`);
+
 export const FileKindSchema = z.enum(['file', 'folder']);
 export type FileKind = z.infer<typeof FileKindSchema>;
 

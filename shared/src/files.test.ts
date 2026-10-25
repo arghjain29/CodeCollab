@@ -1,6 +1,40 @@
 import { describe, expect, it } from 'vitest';
 import { extractMentionNames } from './chat.js';
-import { FilePathSchema, parseDocName } from './files.js';
+import {
+  FileNameSchema,
+  FilePathSchema,
+  baseName,
+  isWithin,
+  joinPath,
+  parentOf,
+  parseDocName,
+} from './files.js';
+
+describe('FileNameSchema', () => {
+  it('accepts plain names and trims them', () => {
+    expect(FileNameSchema.parse(' app.tsx ')).toBe('app.tsx');
+    expect(FileNameSchema.parse('my file.d.ts')).toBe('my file.d.ts');
+  });
+
+  it('rejects slashes, dots-only and odd characters', () => {
+    for (const bad of ['a/b.ts', 'a\\b', '.', '..', '', '   ', 'what?']) {
+      expect(FileNameSchema.safeParse(bad).success, bad).toBe(false);
+    }
+  });
+});
+
+describe('path helpers', () => {
+  it('joins, splits and compares paths', () => {
+    expect(joinPath('', 'a.ts')).toBe('a.ts');
+    expect(joinPath('src/lib', 'a.ts')).toBe('src/lib/a.ts');
+    expect(parentOf('src/lib/a.ts')).toBe('src/lib');
+    expect(parentOf('a.ts')).toBe('');
+    expect(baseName('src/lib/a.ts')).toBe('a.ts');
+    expect(isWithin('src/lib/a.ts', 'src')).toBe(true);
+    expect(isWithin('src', 'src')).toBe(true);
+    expect(isWithin('srcs/a.ts', 'src')).toBe(false);
+  });
+});
 
 describe('FilePathSchema', () => {
   it('accepts normal project paths and tidies slashes', () => {
