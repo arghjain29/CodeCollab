@@ -11,6 +11,8 @@ import {
 } from 'lucide-react';
 import { useMemo, useRef, useState, type MouseEvent } from 'react';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
+import { ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import {
   ContextMenu,
@@ -32,6 +34,7 @@ import { InlineNameInput } from './inline-name-input';
 import { ancestorsAndSelf, buildTree, folderFor, remapExpanded, type TreeNode } from './tree-model';
 import { EntryIcon, TreeRow, indent } from './tree-row';
 import type { Peer } from './use-project-room';
+import { useTreeDnd } from './use-tree-dnd';
 
 type Editing =
   | { mode: 'create'; kind: 'file' | 'folder'; parent: string }
@@ -68,6 +71,7 @@ export function FileTree({
 }) {
   const tree = useMemo(() => buildTree(entries), [entries]);
   const byId = useMemo(() => new Map(entries.map((e) => [e.id, e])), [entries]);
+  const byPath = useMemo(() => new Set(entries.map((e) => e.path)), [entries]);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing>(null);
@@ -126,6 +130,35 @@ export function FileTree({
     setEditing(null);
     if (entry.kind === 'folder') setExpanded((prev) => remapExpanded(prev, entry.path, to));
   };
+
+  /** Drag and drop: move `entry` into `folder`, keeping its name. */
+  const moveInto = (entry: FileEntry, folder: string) => {
+    const name = baseName(entry.path);
+    const to = joinPath(folder, name);
+    if (byPath.has(to)) {
+      toast.error(
+        `“${name}” already exists in ${folder ? `“${baseName(folder)}”` : 'the top level'}`,
+      );
+      return;
+    }
+    expand(ancestorsAndSelf(folder));
+    if (entry.kind === 'folder') setExpanded((prev) => remapExpanded(prev, entry.path, to));
+    setSelectedId(entry.id);
+    move.mutate(
+      { id: entry.id, path: to },
+      {
+        onError: (err) =>
+          toast.error(err instanceof ApiError ? err.message : `Couldn’t move ${name}. Try again.`),
+      },
+    );
+  };
+
+  const dnd = useTreeDnd({
+    byId,
+    enabled: canEdit && !editing,
+    onMove: moveInto,
+    onOpenFolder: (path) => expand([path]),
+  });
 
   const copyPath = (entry: FileEntry) =>
     navigator.clipboard.writeText(entry.path).then(
@@ -227,8 +260,18 @@ export function FileTree({
     const newHere = createRow(entry.path, depth + 1);
 
     return (
-      <li key={entry.id} role="none">
+      <li
+        key={entry.id}
+        role="none"
+        className={cn(
+          isFolder &&
+            dnd.dropFolder === entry.path &&
+            'rounded-md bg-cobalt/5 ring-1 ring-cobalt/30 ring-inset',
+        )}
+      >
         <TreeRow
+          {...dnd.rowProps(entry, isOpen)}
+          className={cn(dnd.dragId === entry.id && 'opacity-50')}
           id={entry.id}
           name={node.name}
           path={entry.path}
@@ -358,7 +401,11 @@ export function FileTree({
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
-            className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-3"
+            className={cn(
+              'min-h-0 flex-1 overflow-y-auto px-1.5 pb-3',
+              dnd.dropFolder === '' && 'bg-cobalt/5 ring-1 ring-cobalt/30 ring-inset',
+            )}
+            {...dnd.rootProps}
             onContextMenu={onContextMenu}
             onClick={onBackgroundClick}
           >

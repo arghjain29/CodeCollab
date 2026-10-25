@@ -1,15 +1,18 @@
 import type { FileEntry } from '@codecollab/shared';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/env', () => ({ env: { VITE_API_URL: 'http://api.test' } }));
 
+const toastError = vi.fn();
+vi.mock('sonner', () => ({ toast: { error: toastError, success: vi.fn() } }));
+
 const createFile = vi.fn();
 const moveFile = vi.fn();
 vi.mock('./files-api', () => ({
   useCreateFile: () => ({ mutateAsync: createFile }),
-  useMoveFile: () => ({ mutateAsync: moveFile }),
+  useMoveFile: () => ({ mutateAsync: moveFile, mutate: moveFile }),
   useDeleteFile: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
@@ -44,6 +47,7 @@ function setup(entries = ENTRIES) {
 beforeEach(() => {
   createFile.mockReset();
   moveFile.mockReset();
+  toastError.mockReset();
 });
 
 describe('creating in place', () => {
@@ -117,5 +121,62 @@ describe('renaming in place', () => {
     await user.type(box, 'main.ts{Enter}');
 
     expect(moveFile).toHaveBeenCalledWith({ id: entry('src/app.ts').id, path: 'src/main.ts' });
+  });
+});
+
+describe('drag and drop', () => {
+  const dataTransfer = () => ({ setData: vi.fn(), effectAllowed: '', dropEffect: '' });
+  const row = (name: string | RegExp) =>
+    screen.getByRole('treeitem', { name }).closest('[data-entry-id]')!;
+
+  /** Drag the row named `from` and drop it on `target`. */
+  function dragOnto(from: string | RegExp, target: Element) {
+    const dt = dataTransfer();
+    fireEvent.dragStart(row(from), { dataTransfer: dt });
+    fireEvent.dragOver(target, { dataTransfer: dt });
+    fireEvent.drop(target, { dataTransfer: dt });
+  }
+
+  it('moves a file into the folder it is dropped on', async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole('treeitem', { name: /src/ }));
+
+    dragOnto('app.ts', row(/docs/));
+
+    expect(moveFile).toHaveBeenCalledWith(
+      { id: entry('src/app.ts').id, path: 'docs/app.ts' },
+      expect.anything(),
+    );
+  });
+
+  it('moves to the top level when dropped on empty space', async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole('treeitem', { name: /src/ }));
+
+    dragOnto('app.ts', screen.getByRole('tree').parentElement!);
+
+    expect(moveFile).toHaveBeenCalledWith(
+      { id: entry('src/app.ts').id, path: 'app.ts' },
+      expect.anything(),
+    );
+  });
+
+  it('ignores dropping a folder into itself', async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole('treeitem', { name: /src/ }));
+
+    dragOnto(/src/, row('app.ts'));
+
+    expect(moveFile).not.toHaveBeenCalled();
+  });
+
+  it('refuses a move that would clash with an existing name', async () => {
+    const { user } = setup([...ENTRIES, entry('docs/app.ts')]);
+    await user.click(screen.getByRole('treeitem', { name: /src/ }));
+
+    dragOnto('app.ts', row(/docs/));
+
+    expect(moveFile).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith('“app.ts” already exists in “docs”');
   });
 });
