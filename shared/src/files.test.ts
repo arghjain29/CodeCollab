@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { extractMentionNames } from './chat.js';
 import {
   FileNameSchema,
+  alreadyExistsMessage,
   FilePathSchema,
   baseName,
   isWithin,
@@ -33,6 +34,8 @@ describe('path helpers', () => {
     expect(isWithin('src/lib/a.ts', 'src')).toBe(true);
     expect(isWithin('src', 'src')).toBe(true);
     expect(isWithin('srcs/a.ts', 'src')).toBe(false);
+    expect(alreadyExistsMessage('src/lib/a.ts')).toBe('“a.ts” already exists in “lib”');
+    expect(alreadyExistsMessage('a.ts')).toBe('“a.ts” already exists at the top level');
   });
 });
 

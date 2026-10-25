@@ -1,4 +1,10 @@
-import { baseName, joinPath, parentOf, type FileEntry } from '@codecollab/shared';
+import {
+  alreadyExistsMessage,
+  baseName,
+  joinPath,
+  parentOf,
+  type FileEntry,
+} from '@codecollab/shared';
 import {
   ClipboardCopy,
   FilePlus,
@@ -158,9 +164,7 @@ export function FileTree({
     const name = baseName(entry.path);
     const to = joinPath(folder, name);
     if (byPath.has(to)) {
-      toast.error(
-        `“${name}” already exists in ${folder ? `“${baseName(folder)}”` : 'the top level'}`,
-      );
+      toast.error(alreadyExistsMessage(to));
       return;
     }
     expand(ancestorsAndSelf(folder));

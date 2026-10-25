@@ -82,6 +82,30 @@ describe('file tree', () => {
     expect(paths).not.toContain('src/a.js');
   });
 
+  it('moves entries between folders and to the top level, reporting clashes by name', async () => {
+    const { bob, id } = await team();
+    const file = await bob.client.post(`${P}/${id}/files`, { path: 'src/a.js' }).expect(201);
+    const lib = await bob.client
+      .post(`${P}/${id}/files`, { path: 'lib', kind: 'folder' })
+      .expect(201);
+    await bob.client.post(`${P}/${id}/files`, { path: 'docs/a.js' }).expect(201);
+
+    await bob.client.patch(`${P}/${id}/files/${file.body.id}`, { path: 'lib/a.js' }).expect(200);
+    await bob.client.patch(`${P}/${id}/files/${lib.body.id}`, { path: 'src/lib' }).expect(200);
+    await bob.client.patch(`${P}/${id}/files/${file.body.id}`, { path: 'a.js' }).expect(200);
+
+    const clash = await bob.client
+      .patch(`${P}/${id}/files/${file.body.id}`, { path: 'docs/a.js' })
+      .expect(409);
+    expect(clash.body.error.message).toBe('“a.js” already exists in “docs”');
+
+    const paths = (await bob.client.get(`${P}/${id}/files`)).body.map(
+      (f: { path: string }) => f.path,
+    );
+    expect(paths).toEqual(expect.arrayContaining(['a.js', 'src/lib', 'docs/a.js']));
+    expect(paths).not.toContain('lib');
+  });
+
   it('deletes a folder and everything in it', async () => {
     const { bob, id } = await team();
     const folder = await bob.client

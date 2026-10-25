@@ -47,6 +47,12 @@ export const parentOf = (path: string) => path.split('/').slice(0, -1).join('/')
 /** The last segment of `path`. */
 export const baseName = (path: string) => path.split('/').pop() ?? path;
 
+/** “x.ts” already exists in “src”, worded the same on the server and in the tree. */
+export const alreadyExistsMessage = (path: string) => {
+  const folder = parentOf(path);
+  return `“${baseName(path)}” already exists ${folder ? `in “${baseName(folder)}”` : 'at the top level'}`;
+};
+
 /** True when `path` is `folder` itself or somewhere inside it. */
 export const isWithin = (path: string, folder: string) =>
   path === folder || path.startsWith(`${folder}/`);
