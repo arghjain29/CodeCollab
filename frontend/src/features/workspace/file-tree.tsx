@@ -153,10 +153,16 @@ export function FileTree({
 
   const submitRename = async (entry: FileEntry, name: string) => {
     const to = joinPath(parentOf(entry.path), name);
-    await move.mutateAsync({ id: entry.id, path: to });
+    // The tree shows the new name straight away, so keep an open folder open meanwhile.
+    if (entry.kind === 'folder') setExpanded((prev) => remapExpanded(prev, entry.path, to));
+    try {
+      await move.mutateAsync({ id: entry.id, path: to });
+    } catch (err) {
+      if (entry.kind === 'folder') setExpanded((prev) => remapExpanded(prev, to, entry.path));
+      throw err;
+    }
     setEditing(null);
     refocus(entry.id);
-    if (entry.kind === 'folder') setExpanded((prev) => remapExpanded(prev, entry.path, to));
   };
 
   /** Drag and drop: move `entry` into `folder`, keeping its name. */
@@ -368,6 +374,8 @@ export function FileTree({
   /** Arrow keys, Home/End, F2 and Delete, as in desktop editors. */
   const onTreeKeyDown = (e: KeyboardEvent) => {
     if (editing || e.altKey || e.ctrlKey || e.metaKey) return;
+    // React also bubbles keys from the row menus, which render in a portal: leave those alone.
+    if (!e.currentTarget.contains(e.target as Node)) return;
     const i = rows.findIndex((r) => r.entry.id === selectedId);
     const node = rows[i];
     const entry = node?.entry;
@@ -414,6 +422,10 @@ export function FileTree({
 
   /** Right-click: remember what was clicked so the menu can offer the right actions. */
   const onContextMenu = (e: MouseEvent) => {
+    if (!e.currentTarget.contains(e.target as Node)) {
+      e.preventDefault(); // Came from an open row menu (a portal), not the tree.
+      return;
+    }
     const id = (e.target as Element).closest('[data-entry-id]')?.getAttribute('data-entry-id');
     const entry = id ? (byId.get(id) ?? null) : null;
     if (!entry && !canEdit) {
@@ -426,7 +438,9 @@ export function FileTree({
 
   /** A click on empty space clears the selection, so new items go to the top level. */
   const onBackgroundClick = (e: MouseEvent) => {
-    if (!(e.target as Element).closest('[data-entry-id]')) setSelectedId(null);
+    const target = e.target as Element;
+    if (!e.currentTarget.contains(target)) return; // A click inside a row menu (a portal).
+    if (!target.closest('[data-entry-id]')) setSelectedId(null);
   };
 
   const rootNew = createRow('', 0);

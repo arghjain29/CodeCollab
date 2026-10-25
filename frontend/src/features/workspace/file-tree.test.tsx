@@ -181,6 +181,25 @@ describe('drag and drop', () => {
   });
 });
 
+describe('row menu', () => {
+  it('keeps the selection and the menu focus when using the row menu', async () => {
+    const { user } = setup();
+
+    await user.click(screen.getByRole('treeitem', { name: /docs/ }));
+    await user.click(screen.getByRole('button', { name: 'Actions for docs' }));
+    await screen.findByRole('menu');
+    await user.keyboard('{ArrowDown}');
+
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    // The open menu hides the tree from assistive tech, hence `hidden: true`.
+    expect(screen.getByRole('treeitem', { name: /src/, hidden: true })).not.toHaveFocus();
+    expect(screen.getByRole('treeitem', { name: /docs/, hidden: true })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+  });
+});
+
 describe('keyboard', () => {
   it('moves with the arrow keys, opens folders and renames with F2', async () => {
     moveFile.mockResolvedValue(entry('src/main.ts'));
