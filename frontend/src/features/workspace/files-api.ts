@@ -1,4 +1,9 @@
-import type { CreateFileInput, FileEntry, FileSnapshot } from '@codecollab/shared';
+import {
+  isWithin,
+  type CreateFileInput,
+  type FileEntry,
+  type FileSnapshot,
+} from '@codecollab/shared';
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { toastError } from '../projects/api';
@@ -25,12 +30,31 @@ export function useCreateFile(projectId: string) {
   });
 }
 
+/** Rename or move. The tree updates straight away and rolls back if the server says no. */
 export function useMoveFile(projectId: string) {
   const qc = useQueryClient();
+  const key = filesKey(projectId);
   return useMutation({
     mutationFn: ({ id, path }: { id: string; path: string }) =>
       api<FileEntry>(`/projects/${projectId}/files/${id}`, { method: 'PATCH', ...json({ path }) }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: filesKey(projectId) }),
+    onMutate: async ({ id, path }) => {
+      await qc.cancelQueries({ queryKey: key });
+      const before = qc.getQueryData<FileEntry[]>(key);
+      const from = before?.find((f) => f.id === id)?.path;
+      if (before && from) {
+        qc.setQueryData<FileEntry[]>(
+          key,
+          before.map((f) =>
+            isWithin(f.path, from) ? { ...f, path: path + f.path.slice(from.length) } : f,
+          ),
+        );
+      }
+      return { before };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.before) qc.setQueryData(key, ctx.before);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: key }),
   });
 }
 

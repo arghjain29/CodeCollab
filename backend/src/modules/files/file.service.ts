@@ -1,5 +1,6 @@
 import {
   FILE_LIMITS,
+  alreadyExistsMessage,
   type CreateFileInput,
   type FileEntry,
   type FileSnapshot,
@@ -74,7 +75,7 @@ export async function createEntry(
 ): Promise<FileEntry> {
   await assertRoomFor(projectId, input.path.split('/').length);
   if (await FileModel.exists({ projectId, path: input.path })) {
-    throw new ConflictError(`“${input.path}” already exists`);
+    throw new ConflictError(alreadyExistsMessage(input.path));
   }
   await ensureParents(projectId, input.path, userId);
 
@@ -91,7 +92,7 @@ export async function createEntry(
     notifyProject(String(projectId), { type: 'files-changed' });
     return toEntry(entry);
   } catch (err) {
-    if (isDuplicateKey(err)) throw new ConflictError(`“${input.path}” already exists`);
+    if (isDuplicateKey(err)) throw new ConflictError(alreadyExistsMessage(input.path));
     throw err;
   }
 }
@@ -111,7 +112,7 @@ export async function moveEntry(
     throw new ValidationError('A folder can’t be moved inside itself');
   }
   if (await FileModel.exists({ projectId, path: newPath })) {
-    throw new ConflictError(`“${newPath}” already exists`);
+    throw new ConflictError(alreadyExistsMessage(newPath));
   }
   await ensureParents(projectId, newPath, userId);
 
@@ -134,7 +135,7 @@ export async function moveEntry(
   try {
     await entry.save();
   } catch (err) {
-    if (isDuplicateKey(err)) throw new ConflictError(`“${newPath}” already exists`);
+    if (isDuplicateKey(err)) throw new ConflictError(alreadyExistsMessage(newPath));
     throw err;
   }
   notifyProject(String(projectId), { type: 'files-changed' });

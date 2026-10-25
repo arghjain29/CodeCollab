@@ -1,74 +1,71 @@
-import { FilePathSchema, type FileEntry } from '@codecollab/shared';
 import {
-  ChevronRight,
-  FileCode2,
-  FileJson,
+  alreadyExistsMessage,
+  baseName,
+  joinPath,
+  parentOf,
+  type FileEntry,
+} from '@codecollab/shared';
+import {
+  ClipboardCopy,
   FilePlus,
-  FileText,
-  Folder,
-  FolderOpen,
   FolderPlus,
+  ListCollapse,
   MoreHorizontal,
   Pencil,
   Trash2,
+  type LucideIcon,
 } from 'lucide-react';
-import { useMemo, useState, type FormEvent } from 'react';
+import { useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { toast } from 'sonner';
-import { presenceClass } from '@/components/ui/avatar';
+import { cn } from '@/lib/utils';
+import { ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/button';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu';
 import { Dialog, DialogClose, DialogContent, DialogFooter } from '@/components/ui/dialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Field, Input } from '@/components/ui/input';
-import { ApiError } from '@/lib/api';
-import { cn } from '@/lib/utils';
 import { useCreateFile, useDeleteFile, useMoveFile } from './files-api';
+import { InlineNameInput } from './inline-name-input';
+import {
+  ancestorsAndSelf,
+  buildTree,
+  folderFor,
+  remapExpanded,
+  visibleRows,
+  type TreeNode,
+} from './tree-model';
+import { EntryIcon, TreeRow, indent } from './tree-row';
 import type { Peer } from './use-project-room';
+import { useTreeDnd } from './use-tree-dnd';
 
-interface TreeNode {
-  entry: FileEntry;
-  name: string;
-  children: TreeNode[];
-}
-
-/** Turn the flat, path-sorted list into a tree: folders first, then files, A–Z. */
-function buildTree(entries: FileEntry[]): TreeNode[] {
-  const root: TreeNode[] = [];
-  const byPath = new Map<string, TreeNode>();
-  for (const entry of [...entries].sort((a, b) => a.path.localeCompare(b.path))) {
-    const node: TreeNode = { entry, name: entry.path.split('/').pop()!, children: [] };
-    byPath.set(entry.path, node);
-    const parent = byPath.get(entry.path.split('/').slice(0, -1).join('/'));
-    (parent ? parent.children : root).push(node);
-  }
-  const sort = (nodes: TreeNode[]) => {
-    nodes.sort(
-      (a, b) =>
-        Number(b.entry.kind === 'folder') - Number(a.entry.kind === 'folder') ||
-        a.name.localeCompare(b.name),
-    );
-    nodes.forEach((n) => sort(n.children));
-  };
-  sort(root);
-  return root;
-}
-
-function FileIcon({ name }: { name: string }) {
-  const ext = name.split('.').pop()?.toLowerCase();
-  const Icon =
-    ext === 'json' ? FileJson : ['md', 'txt', 'mdx'].includes(ext ?? '') ? FileText : FileCode2;
-  return <Icon className="size-4 shrink-0 text-ink-muted" aria-hidden />;
-}
-
-type DialogState =
+type Editing =
   | { mode: 'create'; kind: 'file' | 'folder'; parent: string }
-  | { mode: 'rename'; entry: FileEntry }
-  | { mode: 'delete'; entry: FileEntry }
+  | { mode: 'rename'; id: string }
   | null;
+
+interface MenuAction {
+  key: string;
+  label: string;
+  icon: LucideIcon;
+  shortcut?: string;
+  destructive?: boolean;
+  /** Starts with a separator line. */
+  separated?: boolean;
+  /** Wait for the menu to close first, because the action moves focus. */
+  afterClose?: boolean;
+  run: () => void;
+}
 
 export function FileTree({
   projectId,
@@ -86,8 +83,24 @@ export function FileTree({
   onOpen: (entry: FileEntry) => void;
 }) {
   const tree = useMemo(() => buildTree(entries), [entries]);
+  const byId = useMemo(() => new Map(entries.map((e) => [e.id, e])), [entries]);
+  const byPath = useMemo(() => new Set(entries.map((e) => e.path)), [entries]);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  const [dialog, setDialog] = useState<DialogState>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editing, setEditing] = useState<Editing>(null);
+  const [deleting, setDeleting] = useState<FileEntry | null>(null);
+  const [menuEntry, setMenuEntry] = useState<FileEntry | null>(null);
+  /** An action picked from a menu, run once the menu has closed and let go of focus. */
+  const afterMenu = useRef<(() => void) | null>(null);
+
+  const create = useCreateFile(projectId);
+  const move = useMoveFile(projectId);
+
+  const selected = selectedId ? byId.get(selectedId) : undefined;
+  const listRef = useRef<HTMLUListElement>(null);
+  const rows = useMemo(() => visibleRows(tree, expanded), [tree, expanded]);
+  /** The row Tab lands on: the selection if it is on screen, else the first row. */
+  const tabStop = rows.some((r) => r.entry.id === selectedId) ? selectedId : rows[0]?.entry.id;
 
   // Who is looking at which file (other people only).
   const peersByFile = useMemo(() => {
@@ -99,6 +112,13 @@ export function FileTree({
     return map;
   }, [peers]);
 
+  const expand = (paths: string[]) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      for (const p of paths) next.add(p);
+      return next;
+    });
+
   const toggle = (path: string) =>
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -107,320 +127,459 @@ export function FileTree({
       return next;
     });
 
+  const focusRow = (id: string) => {
+    setSelectedId(id);
+    listRef.current
+      ?.querySelector<HTMLElement>(`[data-entry-id="${id}"] [role="treeitem"]`)
+      ?.focus();
+  };
+  /** Focus a row once it is back on screen, e.g. after its name box closes. */
+  const refocus = (id: string) => requestAnimationFrame(() => focusRow(id));
+
+  // ---------- Actions ----------
+
+  const startCreate = (kind: 'file' | 'folder', parent: string) => {
+    expand(ancestorsAndSelf(parent));
+    setEditing({ mode: 'create', kind, parent });
+  };
+
+  const submitCreate = async (kind: 'file' | 'folder', parent: string, name: string) => {
+    const entry = await create.mutateAsync({ path: joinPath(parent, name), kind });
+    setEditing(null);
+    setSelectedId(entry.id);
+    if (kind === 'file') onOpen(entry);
+    else refocus(entry.id);
+  };
+
+  const submitRename = async (entry: FileEntry, name: string) => {
+    const to = joinPath(parentOf(entry.path), name);
+    // The tree shows the new name straight away, so keep an open folder open meanwhile.
+    if (entry.kind === 'folder') setExpanded((prev) => remapExpanded(prev, entry.path, to));
+    try {
+      await move.mutateAsync({ id: entry.id, path: to });
+    } catch (err) {
+      if (entry.kind === 'folder') setExpanded((prev) => remapExpanded(prev, to, entry.path));
+      throw err;
+    }
+    setEditing(null);
+    refocus(entry.id);
+  };
+
+  /** Drag and drop: move `entry` into `folder`, keeping its name. */
+  const moveInto = (entry: FileEntry, folder: string) => {
+    const name = baseName(entry.path);
+    const to = joinPath(folder, name);
+    if (byPath.has(to)) {
+      toast.error(alreadyExistsMessage(to));
+      return;
+    }
+    expand(ancestorsAndSelf(folder));
+    if (entry.kind === 'folder') setExpanded((prev) => remapExpanded(prev, entry.path, to));
+    setSelectedId(entry.id);
+    move.mutate(
+      { id: entry.id, path: to },
+      {
+        onError: (err) =>
+          toast.error(err instanceof ApiError ? err.message : `Couldn’t move ${name}. Try again.`),
+      },
+    );
+  };
+
+  const dnd = useTreeDnd({
+    byId,
+    enabled: canEdit && !editing,
+    onMove: moveInto,
+    onOpenFolder: (path) => expand([path]),
+  });
+
+  const copyPath = (entry: FileEntry) =>
+    navigator.clipboard.writeText(entry.path).then(
+      () => toast.success('Path copied'),
+      () => toast.error('Couldn’t copy the path'),
+    );
+
+  /** What the menus offer for an entry, or for empty space when `entry` is null. */
+  const actionsFor = (entry: FileEntry | null): MenuAction[] => {
+    const actions: MenuAction[] = [];
+    if (canEdit && (!entry || entry.kind === 'folder')) {
+      const parent = folderFor(entry);
+      actions.push(
+        {
+          key: 'new-file',
+          label: 'New file',
+          icon: FilePlus,
+          afterClose: true,
+          run: () => startCreate('file', parent),
+        },
+        {
+          key: 'new-folder',
+          label: 'New folder',
+          icon: FolderPlus,
+          afterClose: true,
+          run: () => startCreate('folder', parent),
+        },
+      );
+    }
+    if (entry) {
+      if (canEdit) {
+        actions.push({
+          key: 'rename',
+          label: 'Rename',
+          icon: Pencil,
+          shortcut: 'F2',
+          separated: actions.length > 0,
+          afterClose: true,
+          run: () => setEditing({ mode: 'rename', id: entry.id }),
+        });
+      }
+      actions.push({
+        key: 'copy',
+        label: 'Copy path',
+        icon: ClipboardCopy,
+        separated: !canEdit && actions.length > 0,
+        run: () => void copyPath(entry),
+      });
+      if (canEdit) {
+        actions.push({
+          key: 'delete',
+          label: 'Delete',
+          icon: Trash2,
+          shortcut: 'Del',
+          destructive: true,
+          separated: true,
+          run: () => setDeleting(entry),
+        });
+      }
+    }
+    return actions;
+  };
+
+  const pick = (action: MenuAction) => {
+    if (action.afterClose) afterMenu.current = action.run;
+    else action.run();
+  };
+
+  const onMenuClosed = (e: Event) => {
+    const run = afterMenu.current;
+    if (!run) return;
+    // Focus is about to go to the name box, so don't hand it back to the trigger.
+    e.preventDefault();
+    afterMenu.current = null;
+    run();
+  };
+
+  // ---------- Rendering ----------
+
+  const createRow = (parent: string, depth: number) =>
+    editing?.mode === 'create' && editing.parent === parent ? (
+      <li role="none" key="__new">
+        <div className="flex items-center gap-1.5 rounded-md pr-1" style={indent(depth)}>
+          <EntryIcon kind={editing.kind} name="" />
+          <InlineNameInput
+            label={editing.kind === 'file' ? 'New file name' : 'New folder name'}
+            onSubmit={(name) => submitCreate(editing.kind, parent, name)}
+            onCancel={() => setEditing(null)}
+          />
+        </div>
+      </li>
+    ) : null;
+
   const renderNode = (node: TreeNode, depth: number) => {
     const { entry } = node;
     const isFolder = entry.kind === 'folder';
-    const isOpen = expanded.has(entry.path);
-    const here = peersByFile.get(entry.id) ?? [];
+    const isOpen = isFolder && expanded.has(entry.path);
+    const renaming = editing?.mode === 'rename' && editing.id === entry.id;
+    const newHere = createRow(entry.path, depth + 1);
 
     return (
-      <li key={entry.id} role="none">
-        <div
-          className={cn(
-            'group flex items-center rounded-md pr-1 text-sm hover:bg-surface-2',
-            entry.id === activeFileId && 'bg-cobalt/10 text-ink hover:bg-cobalt/15',
-          )}
-        >
-          <button
-            type="button"
-            role="treeitem"
-            aria-expanded={isFolder ? isOpen : undefined}
-            aria-selected={entry.id === activeFileId}
-            onClick={() => (isFolder ? toggle(entry.path) : onOpen(entry))}
-            className="flex min-w-0 flex-1 items-center gap-1.5 py-1.5 text-left"
-            style={{ paddingLeft: `${depth * 12 + 6}px` }}
-            title={entry.path}
-          >
-            {isFolder ? (
-              <>
-                <ChevronRight
-                  className={cn(
-                    'size-3.5 shrink-0 text-ink-muted transition-transform',
-                    isOpen && 'rotate-90',
-                  )}
-                  aria-hidden
-                />
-                {isOpen ? (
-                  <FolderOpen className="size-4 shrink-0 text-ink-muted" aria-hidden />
-                ) : (
-                  <Folder className="size-4 shrink-0 text-ink-muted" aria-hidden />
-                )}
-              </>
-            ) : (
-              <>
-                <span className="w-3.5 shrink-0" />
-                <FileIcon name={node.name} />
-              </>
-            )}
-            <span className="truncate">{node.name}</span>
-          </button>
-
-          {here.length > 0 && (
-            <span
-              className="mr-1 flex -space-x-1"
-              title={`${here.map((p) => p.user.name).join(', ')} ${here.length === 1 ? 'is' : 'are'} here`}
-            >
-              {here.slice(0, 3).map((p) => (
-                <span
-                  key={p.clientId}
-                  className={cn(
-                    'size-2 rounded-full ring-2 ring-surface',
-                    presenceClass(p.user.id),
-                  )}
-                />
-              ))}
-            </span>
-          )}
-
-          {canEdit && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  aria-label={`Actions for ${node.name}`}
-                  className="rounded p-1 text-ink-muted opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 hover:bg-surface hover:text-ink data-[state=open]:opacity-100"
-                >
-                  <MoreHorizontal className="size-3.5" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent>
-                {isFolder && (
-                  <>
+      <li
+        key={entry.id}
+        role="none"
+        className={cn(
+          isFolder &&
+            dnd.dropFolder === entry.path &&
+            'rounded-md bg-cobalt/5 ring-1 ring-cobalt/30 ring-inset',
+        )}
+      >
+        <TreeRow
+          {...dnd.rowProps(entry, isOpen)}
+          className={cn(dnd.dragId === entry.id && 'opacity-50')}
+          id={entry.id}
+          name={node.name}
+          path={entry.path}
+          kind={entry.kind}
+          depth={depth}
+          open={isOpen}
+          active={entry.id === activeFileId}
+          selected={entry.id === selectedId}
+          tabbable={entry.id === tabStop}
+          peers={peersByFile.get(entry.id) ?? []}
+          onActivate={() => {
+            setSelectedId(entry.id);
+            if (isFolder) toggle(entry.path);
+            else onOpen(entry);
+          }}
+          editor={
+            renaming ? (
+              <InlineNameInput
+                label={`Rename ${node.name}`}
+                initial={node.name}
+                onSubmit={(name) => submitRename(entry, name)}
+                onCancel={() => {
+                  setEditing(null);
+                  refocus(entry.id);
+                }}
+              />
+            ) : undefined
+          }
+          menu={
+            canEdit && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    aria-label={`Actions for ${node.name}`}
+                    className="rounded p-1 text-ink-muted opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 hover:bg-surface hover:text-ink data-[state=open]:opacity-100"
+                  >
+                    <MoreHorizontal className="size-3.5" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent onCloseAutoFocus={onMenuClosed}>
+                  {actionsFor(entry).map((a) => [
+                    a.separated && <DropdownMenuSeparator key={`${a.key}-sep`} />,
                     <DropdownMenuItem
-                      onSelect={() =>
-                        setDialog({ mode: 'create', kind: 'file', parent: entry.path })
-                      }
+                      key={a.key}
+                      destructive={a.destructive}
+                      onSelect={() => pick(a)}
                     >
-                      <FilePlus /> New file here
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onSelect={() =>
-                        setDialog({ mode: 'create', kind: 'folder', parent: entry.path })
-                      }
-                    >
-                      <FolderPlus /> New folder here
-                    </DropdownMenuItem>
-                  </>
-                )}
-                <DropdownMenuItem onSelect={() => setDialog({ mode: 'rename', entry })}>
-                  <Pencil /> Rename or move
-                </DropdownMenuItem>
-                <DropdownMenuItem destructive onSelect={() => setDialog({ mode: 'delete', entry })}>
-                  <Trash2 /> Delete
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-        </div>
-        {isFolder && isOpen && node.children.length > 0 && (
-          <ul role="group">{node.children.map((c) => renderNode(c, depth + 1))}</ul>
+                      <a.icon /> {a.label}
+                    </DropdownMenuItem>,
+                  ])}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )
+          }
+        />
+        {isOpen && (node.children.length > 0 || newHere) && (
+          <ul role="group">
+            {newHere}
+            {node.children.map((c) => renderNode(c, depth + 1))}
+          </ul>
         )}
       </li>
     );
   };
 
+  /** Arrow keys, Home/End, F2 and Delete, as in desktop editors. */
+  const onTreeKeyDown = (e: KeyboardEvent) => {
+    if (editing || e.altKey || e.ctrlKey || e.metaKey) return;
+    // React also bubbles keys from the row menus, which render in a portal: leave those alone.
+    if (!e.currentTarget.contains(e.target as Node)) return;
+    const i = rows.findIndex((r) => r.entry.id === selectedId);
+    const node = rows[i];
+    const entry = node?.entry;
+    const isOpenFolder = entry?.kind === 'folder' && expanded.has(entry.path);
+    const go = (target: TreeNode | undefined) => target && focusRow(target.entry.id);
+
+    switch (e.key) {
+      case 'ArrowDown':
+        go(i < 0 ? rows[0] : rows[i + 1]);
+        break;
+      case 'ArrowUp':
+        go(i < 0 ? rows[0] : rows[i - 1]);
+        break;
+      case 'Home':
+        go(rows[0]);
+        break;
+      case 'End':
+        go(rows[rows.length - 1]);
+        break;
+      case 'ArrowRight':
+        if (entry?.kind !== 'folder') return;
+        if (!isOpenFolder) toggle(entry.path);
+        else if (node?.children.length) go(rows[i + 1]);
+        break;
+      case 'ArrowLeft': {
+        if (!entry) return;
+        if (isOpenFolder) toggle(entry.path);
+        else go(rows.find((r) => r.entry.path === parentOf(entry.path)));
+        break;
+      }
+      case 'F2':
+        if (!canEdit || !entry) return;
+        setEditing({ mode: 'rename', id: entry.id });
+        break;
+      case 'Delete':
+        if (!canEdit || !entry) return;
+        setDeleting(entry);
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+  };
+
+  /** Right-click: remember what was clicked so the menu can offer the right actions. */
+  const onContextMenu = (e: MouseEvent) => {
+    if (!e.currentTarget.contains(e.target as Node)) {
+      e.preventDefault(); // Came from an open row menu (a portal), not the tree.
+      return;
+    }
+    const id = (e.target as Element).closest('[data-entry-id]')?.getAttribute('data-entry-id');
+    const entry = id ? (byId.get(id) ?? null) : null;
+    if (!entry && !canEdit) {
+      e.preventDefault(); // Nothing to offer on empty space for viewers.
+      return;
+    }
+    setMenuEntry(entry);
+    setSelectedId(entry?.id ?? null);
+  };
+
+  /** A click on empty space clears the selection, so new items go to the top level. */
+  const onBackgroundClick = (e: MouseEvent) => {
+    const target = e.target as Element;
+    if (!e.currentTarget.contains(target)) return; // A click inside a row menu (a portal).
+    if (!target.closest('[data-entry-id]')) setSelectedId(null);
+  };
+
+  const rootNew = createRow('', 0);
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center justify-between px-3 py-2">
         <h2 className="text-xs font-semibold text-ink-muted">Files</h2>
-        {canEdit && (
-          <div className="flex">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-7"
-              aria-label="New file"
-              title="New file"
-              onClick={() => setDialog({ mode: 'create', kind: 'file', parent: '' })}
-            >
-              <FilePlus />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-7"
-              aria-label="New folder"
-              title="New folder"
-              onClick={() => setDialog({ mode: 'create', kind: 'folder', parent: '' })}
-            >
-              <FolderPlus />
-            </Button>
+        <div className="flex">
+          {canEdit && (
+            <>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-7"
+                aria-label="New file"
+                title="New file"
+                onClick={() => startCreate('file', folderFor(selected))}
+              >
+                <FilePlus />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-7"
+                aria-label="New folder"
+                title="New folder"
+                onClick={() => startCreate('folder', folderFor(selected))}
+              >
+                <FolderPlus />
+              </Button>
+            </>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            aria-label="Collapse folders"
+            title="Collapse folders"
+            disabled={expanded.size === 0}
+            onClick={() => setExpanded(new Set())}
+          >
+            <ListCollapse />
+          </Button>
+        </div>
+      </div>
+
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div
+            className={cn(
+              'min-h-0 flex-1 overflow-y-auto px-1.5 pb-3',
+              dnd.dropFolder === '' && 'bg-cobalt/5 ring-1 ring-cobalt/30 ring-inset',
+            )}
+            {...dnd.rootProps}
+            onContextMenu={onContextMenu}
+            onClick={onBackgroundClick}
+          >
+            {tree.length === 0 && !rootNew ? (
+              <p className="px-3 py-6 text-sm text-ink-muted">
+                {canEdit ? 'No files yet. Create one to start.' : 'This project has no files yet.'}
+              </p>
+            ) : (
+              <ul ref={listRef} role="tree" aria-label="Project files" onKeyDown={onTreeKeyDown}>
+                {rootNew}
+                {tree.map((n) => renderNode(n, 0))}
+              </ul>
+            )}
           </div>
-        )}
-      </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent onCloseAutoFocus={onMenuClosed}>
+          {actionsFor(menuEntry).map((a) => [
+            a.separated && <ContextMenuSeparator key={`${a.key}-sep`} />,
+            <ContextMenuItem
+              key={a.key}
+              destructive={a.destructive}
+              shortcut={a.shortcut}
+              onSelect={() => pick(a)}
+            >
+              <a.icon /> {a.label}
+            </ContextMenuItem>,
+          ])}
+        </ContextMenuContent>
+      </ContextMenu>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-3">
-        {tree.length === 0 ? (
-          <p className="px-3 py-6 text-sm text-ink-muted">
-            {canEdit ? 'No files yet. Create one to start.' : 'This project has no files yet.'}
-          </p>
-        ) : (
-          <ul role="tree" aria-label="Project files">
-            {tree.map((n) => renderNode(n, 0))}
-          </ul>
-        )}
-      </div>
-
-      <FileDialogs
+      <DeleteDialog
         projectId={projectId}
-        state={dialog}
-        onClose={() => setDialog(null)}
-        onCreated={(entry) => {
-          // Reveal what was just created.
-          setExpanded((prev) => {
-            const next = new Set(prev);
-            const parts = entry.path.split('/');
-            for (let i = 1; i < parts.length; i++) next.add(parts.slice(0, i).join('/'));
-            return next;
-          });
-          if (entry.kind === 'file') onOpen(entry);
+        entry={deleting}
+        onClose={(deleted) => {
+          if (deleted && deleting?.id === selectedId) setSelectedId(null);
+          setDeleting(null);
         }}
       />
     </div>
   );
 }
 
-function FileDialogs({
+function DeleteDialog({
   projectId,
-  state,
+  entry,
   onClose,
-  onCreated,
 }: {
   projectId: string;
-  state: DialogState;
-  onClose: () => void;
-  onCreated: (entry: FileEntry) => void;
+  entry: FileEntry | null;
+  onClose: (deleted: boolean) => void;
 }) {
-  const create = useCreateFile(projectId);
-  const move = useMoveFile(projectId);
   const del = useDeleteFile(projectId);
-  const [error, setError] = useState<string>();
-
-  const close = () => {
-    setError(undefined);
-    onClose();
-  };
-
-  const onSubmit = (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!state || state.mode === 'delete') return;
-    const raw = String(new FormData(e.currentTarget).get('path') ?? '');
-    const parsed = FilePathSchema.safeParse(raw);
-    if (!parsed.success) {
-      setError(parsed.error.issues[0]?.message);
-      return;
-    }
-    const onError = (err: unknown) =>
-      setError(err instanceof ApiError ? err.message : 'Something went wrong. Try again.');
-
-    if (state.mode === 'create') {
-      create.mutate(
-        { path: parsed.data, kind: state.kind },
-        {
-          onSuccess: (entry) => {
-            close();
-            onCreated(entry);
-          },
-          onError,
-        },
-      );
-    } else {
-      move.mutate({ id: state.entry.id, path: parsed.data }, { onSuccess: () => close(), onError });
-    }
-  };
-
-  if (state?.mode === 'delete') {
-    const isFolder = state.entry.kind === 'folder';
-    return (
-      <Dialog open onOpenChange={(o) => !o && close()}>
-        <DialogContent
-          title={`Delete ${state.entry.path.split('/').pop()}?`}
-          description={
-            isFolder
-              ? 'The folder and everything in it will be deleted for everyone. This can’t be undone.'
-              : 'The file will be deleted for everyone. This can’t be undone.'
-          }
-        >
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button variant="secondary">Cancel</Button>
-            </DialogClose>
-            <Button
-              variant="danger"
-              disabled={del.isPending}
-              onClick={() =>
-                del.mutate(state.entry.id, {
-                  onSuccess: () => {
-                    toast.success(`Deleted ${state.entry.path}`);
-                    close();
-                  },
-                })
-              }
-            >
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    );
-  }
-
-  const isCreate = state?.mode === 'create';
-  const title = !state
-    ? ''
-    : isCreate
-      ? state.kind === 'file'
-        ? 'New file'
-        : 'New folder'
-      : 'Rename or move';
-  const defaultValue = !state
-    ? ''
-    : isCreate
-      ? state.parent
-        ? `${state.parent}/`
-        : ''
-      : state.entry.path;
-
+  if (!entry) return null;
+  const isFolder = entry.kind === 'folder';
   return (
-    <Dialog open={!!state} onOpenChange={(o) => !o && close()}>
-      {state && (
-        <DialogContent
-          title={title}
-          description="Use slashes for folders, e.g. src/components/Button.tsx. Missing folders are created for you."
-        >
-          <form onSubmit={onSubmit} className="grid gap-4" noValidate>
-            <Field id="file-path" label="Path" error={error}>
-              <Input
-                id="file-path"
-                name="path"
-                defaultValue={defaultValue}
-                autoFocus
-                autoComplete="off"
-                spellCheck={false}
-                className="font-mono text-[13px]"
-                aria-invalid={!!error}
-                onFocus={(e) => {
-                  // Select just the name part, like desktop editors do.
-                  const v = e.currentTarget.value;
-                  const start = v.lastIndexOf('/') + 1;
-                  const dot = v.lastIndexOf('.');
-                  e.currentTarget.setSelectionRange(start, dot > start ? dot : v.length);
-                }}
-              />
-            </Field>
-            <DialogFooter>
-              <DialogClose asChild>
-                <Button type="button" variant="secondary">
-                  Cancel
-                </Button>
-              </DialogClose>
-              <Button type="submit" disabled={create.isPending || move.isPending}>
-                {isCreate ? 'Create' : 'Save'}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      )}
+    <Dialog open onOpenChange={(o) => !o && onClose(false)}>
+      <DialogContent
+        title={`Delete ${baseName(entry.path)}?`}
+        description={
+          isFolder
+            ? 'The folder and everything in it will be deleted for everyone. This can’t be undone.'
+            : 'The file will be deleted for everyone. This can’t be undone.'
+        }
+      >
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="secondary">Cancel</Button>
+          </DialogClose>
+          <Button
+            variant="danger"
+            disabled={del.isPending}
+            onClick={() =>
+              del.mutate(entry.id, {
+                onSuccess: () => {
+                  toast.success(`Deleted ${baseName(entry.path)}`);
+                  onClose(true);
+                },
+              })
+            }
+          >
+            Delete
+          </Button>
+        </DialogFooter>
+      </DialogContent>
     </Dialog>
   );
 }
